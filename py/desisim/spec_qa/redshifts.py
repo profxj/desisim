@@ -112,7 +112,53 @@ def load_z(fibermap_files=None, zbest_files=None, path=None):
     sim_tab.add_columns(new_clms)
 
     # Return
+    #xdb.set_trace()
     return sim_tab # Masked Table
+
+def summary_stats(sim_tab, CAT_THRESH=5., outfil=None):
+    '''Generate a table of summary stats
+    CAT_THRESH: float, optional
+      Theshold in sigma for catastrophic failure
+    '''
+    # Record software versions 
+    meta = dict(SIMPSPEC_V='SIMPSEC_v1.102')
+    # Cut on analyzed systems
+    cut_tab = sim_tab[np.where(sim_tab['REDM_Z'].mask == False)[0]]
+    # 
+    otypes = ['ELG','LRG','QSO','STD']
+    # 
+    rows = []
+    cata = []
+    #
+    for otype in otypes:
+        #
+        idict = dict(OBJTYPE=otype)
+        # 
+        gdo = np.where(cut_tab['OBJTYPE_1']==otype)[0]
+        idict['NOBJ'] = len(gdo)
+        # Stats
+        # delta z
+        dz = ((cut_tab['REDM_Z'][gdo]-cut_tab['REDSHIFT'][gdo])/ 
+            (1+cut_tab['REDSHIFT'][gdo]))
+        idict['MED_DZ'] = np.median(dz)
+        # Catastrophic failures
+        cat = np.where((cut_tab['REDM_Z'][gdo]-cut_tab['REDSHIFT'][gdo])/
+            cut_tab['REDM_ZERR'][gdo] > CAT_THRESH)[0]
+        idict['NCAT'] = len(cat)
+        cata = cata + list(cat)
+        # Append
+        rows.append(idict)
+
+    # Generate a Table
+    clms = ['OBJTYPE', 'NOBJ', 'MED_DZ', 'NCAT']
+    stat_tab = Table(rows=rows)
+    stat_tab = stat_tab[clms] # Sort them
+    stat_tab.meta = meta
+
+    # Write the Table
+    if outfil is None:
+        outfil = 'stat_tab.ascii'
+    stat_tab.write(outfil, format='ascii.ecsv')#, overwrite=True)
 
 def qa_z_summ(sim_tab, outfil=None):
     """
@@ -182,6 +228,74 @@ def qa_z_summ(sim_tab, outfil=None):
     if outfil is not None:
         plt.savefig(outfil)
 
+def qa_z_elg(sim_tab, outfil=None):
+    """
+    Generate QA plot for ELGs
+    Parameters:
+    sim_tab
+    """
+    from scipy.stats import norm, chi2
+
+    if outfil is None:
+        outfil = 'qa_z_elg.pdf'
+
+    deltaz = 0.00035
+
+    # Plot
+    fig = plt.figure(figsize=(8, 6.0))
+    gs = gridspec.GridSpec(2,2)
+
+    # Cut table
+    cut_tab = sim_tab[np.where(sim_tab['REDM_Z'].mask == False)[0]]
+    cut_tab = cut_tab[np.where(cut_tab['OBJTYPE_1'] == 'ELG')[0]]
+
+    sty_otype = dict(ELG={'color':'green'},
+        LRG={'color':'red'},
+        QSO={'color':'blue'})
+
+    # Offset
+    for kk in range(2):
+        # y-axis
+        if kk == 0:
+            dz = ((cut_tab['REDM_Z']-cut_tab['REDSHIFT'])/ 
+                (1+cut_tab['REDSHIFT']))
+            ylbl = (r'$(z_{\rm red}-z_{\rm true}) / (1+z)$')
+            ylim = deltaz
+        elif kk == 1:
+            dz = ((cut_tab['REDM_Z']-cut_tab['REDSHIFT'])/ 
+                (cut_tab['REDM_ZERR']))
+            ylbl = (r'$(z_{\rm red}-z_{\rm true}) / \sigma(z)$')
+            ylim = 3.
+        # x-axis
+        for jj in range(2):
+            ax= plt.subplot(gs[kk,jj])
+            if jj == 0:
+                lbl = r'$z_{\rm true}$'
+                xval = cut_tab['REDSHIFT']
+                xmin,xmax=0.6,1.65
+            elif jj == 1:
+                lbl = r'[OII] Flux ($10^{-16}$)'
+                xval = cut_tab['O2FLUX']*1e16
+                xmin,xmax=0.3,20
+                ax.set_xscale("log", nonposy='clip')
+            # x labels
+            ax.set_ylabel(ylbl)
+            ax.set_xlabel(lbl)
+            ax.set_xlim(xmin,xmax)
+            ax.set_ylim(-ylim, ylim)
+
+            # Points
+            ax.scatter(xval, dz, marker='o', 
+                s=1, label='ELG', color=sty_otype['ELG']['color'])
+
+    # Legend
+    #legend = ax.legend(loc='lower left', borderpad=0.3,
+    #                    handletextpad=0.3, fontsize='small')
+    # Finish
+    plt.tight_layout(pad=0.1,h_pad=0.0,w_pad=0.0)
+    if outfil is not None:
+        plt.savefig(outfil)
+
 # ##################################################
 # ##################################################
 # Command line execution for testing
@@ -190,7 +304,9 @@ if __name__ == '__main__':
 
     flg_tst = 0 
     #flg_tst += 2**0  # load redshifts
-    flg_tst += 2**1  # simple redshift stats
+    #flg_tst += 2**1  # simple redshift stats
+    #flg_tst += 2**2  # ELGs
+    flg_tst += 2**3  # Summary table
 
     if (flg_tst % 2**1) >= 2**0:
         sim_tab=load_z()
@@ -198,4 +314,12 @@ if __name__ == '__main__':
     if (flg_tst % 2**2) >= 2**1:
         sim_tab=load_z()
         qa_z_summ(sim_tab)
+
+    if (flg_tst % 2**3) >= 2**2:
+        sim_tab=load_z()
+        qa_z_elg(sim_tab)
+
+    if (flg_tst % 2**4) >= 2**3:
+        sim_tab=load_z()
+        summary_stats(sim_tab)
 
