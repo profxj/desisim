@@ -12,6 +12,8 @@ import sys, os, pdb
 from matplotlib import pyplot as plt
 import matplotlib.gridspec as gridspec
 
+from astropy.io import fits
+
 from desispec.resolution import Resolution
 from desispec.log import get_logger
 from desispec import util
@@ -22,22 +24,14 @@ from desispec.io import frame as desi_io_frame
 from desispec.io import fibermap as desi_io_fmap
 from desispec.io import read_sky
 from desispec import sky as dspec_sky
-
 from desispec.fiberflat import apply_fiberflat
+
+#from xastropy.xutils import xdebug as xdb
 
 def tst_meansky_fibers(simspec_fil, frame_root, fflat_root, path=None):
     '''Examines mean sky in SKY fibers
     '''
     # imports
-    import specter.throughput as spec_thru
-    import specter.psf.spotgrid as SpotGridPSF
-    sys.path.append(os.path.abspath("/Users/xavier/DESI/desisim_v0.4.1/desisim/"))
-    import interpolation as desi_interp
-    import io as desisim_io
-    #
-
-    from astropy.io import fits
-    from xastropy.xutils import xdebug as xdb
 
     # Truth from simspec
     simsp_hdu = fits.open(simspec_fil)
