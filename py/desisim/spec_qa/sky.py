@@ -4,8 +4,14 @@ desisim.spec_qa.sky
 
 Utility functions to do simple QA on the Sky Modeling
 """
+from __future__ import print_function, absolute_import, division, unicode_literals
 
 import numpy as np
+import sys, os, pdb
+
+from matplotlib import pyplot as plt
+import matplotlib.gridspec as gridspec
+
 from desispec.resolution import Resolution
 from desispec.log import get_logger
 from desispec import util
@@ -18,10 +24,6 @@ from desispec.io import read_sky
 from desispec import sky as dspec_sky
 
 from desispec.fiberflat import apply_fiberflat
-
-import scipy,scipy.sparse
-import sys, os
-import pdb
 
 def tst_meansky_fibers(simspec_fil, frame_root, fflat_root, path=None):
     '''Examines mean sky in SKY fibers
@@ -104,10 +106,13 @@ def tst_meansky_fibers(simspec_fil, frame_root, fflat_root, path=None):
         avg_desi_sub = np.mean(frame.flux[skyfibers,:],0)
 
         # Generate QA
-        qa_mean_spec(frame.wave, avg_desi_sky, avg_desi_sub, None, 
-            None, avg_truth, outfil='QA_sky_mean_'+camera+'.pdf')
-        qa_fiber_chi(frame)
+        if False:
+            qa_mean_spec(frame.wave, avg_desi_sky, avg_desi_sub, None, 
+                None, avg_truth, outfil='QA_sky_mean_'+camera+'.pdf')
+            qa_fiber_chi(frame, skyfibers, outfil='QA_fiber_chi_'+camera+'.pdf')
+        qa_fiber_stats(frame, skyfibers, outfil='QA_fiber_stats_'+camera+'.pdf')
         # 
+        #break
         #xdb.set_trace()
 
 def tst_deconvolve_mean_sky(simspec_fil, frame_root, fiber_fil, path=None):
@@ -167,13 +172,6 @@ def qa_mean_spec(wave, sky_model, sky_sub, sky_var, true_wave, true_sky,
     true_wave, true_sky:  ndarrays
       Photons/s from simspec file
     """
-    from astropy.io import fits
-    from matplotlib import pyplot as plt
-    import matplotlib.gridspec as gridspec
-    import sys, os
-    #
-
-
     # Mean spectrum
     if outfil is None:
         outfil = 'tmp_qa_mean_sky.pdf'
@@ -257,6 +255,129 @@ def qa_mean_spec(wave, sky_model, sky_sub, sky_var, true_wave, true_sky,
     # Finish
     plt.tight_layout(pad=0.1,h_pad=0.0,w_pad=0.0)
     plt.savefig(outfil)
+
+def qa_fiber_stats(frame, skyfibers, outfil=None):
+    """
+    Generate QA plot of fiber stats for individual sky-subtracted Sky fibers
+    Parameters:
+    frame
+    skyfibers
+    """
+    from scipy.stats import norm, chi2
+
+    # Consider going to additional pages
+    nsky = len(skyfibers)
+    xmin, xmax = np.min(skyfibers)-5, np.max(skyfibers)+5
+
+    # Plot
+    fig = plt.figure(figsize=(8, 5.0))
+    gs = gridspec.GridSpec(1,2)
+
+    # Do stats
+    means = np.zeros(nsky)
+    medians = np.zeros(nsky)
+    red_chi2 = np.zeros(nsky)
+    for kk,skyfiber in enumerate(skyfibers):
+        # Histogram the sigma (should avoid bad ivar pixels)
+        msk = np.where(frame.ivar[skyfiber,:] > 0.)[0]
+        nsig = frame.flux[skyfiber,msk] * np.sqrt(frame.ivar[skyfiber,msk])
+        red_chi2[kk] = np.sum( nsig**2) / len(msk)
+        means[kk] = np.mean(nsig)
+        medians[kk] = np.median(nsig)
+        #print('Mean={:g}, chi^2={:g} for fiber={:d}'.format(
+        #    np.mean(nsig),red_chi2,kk))
+
+    # Global
+    jj=0
+    ax= plt.subplot(gs[jj])
+
+    xscatt = np.arange(nsky)
+    ax.scatter(skyfibers, medians, marker='o', s=1, label=r'Median $(\delta/\sigma)$')
+    ax.scatter(skyfibers, red_chi2-1., marker='s', edgecolor='blue',
+        facecolor='none',s=3, label=r'$\chi^2_\nu-1$')
+
+    # Axes
+    #ax_flux.set_ylabel('N')
+    #ax.set_xlim(xmin,xmax)
+    #lbls = ['{:d}'.format(skyfiber) for skyfiber in skyfibers]
+    #ax.get_xaxis().set_ticks(skyfibers,lbls)
+    #ax.set_ylim(-0.1, 0.2)
+    ax.plot([xmin,xmax], [0.,0], 'g--')
+    ax.set_xlim(xmin, xmax)
+    ax.set_xlabel('Fiber')
+
+    # Legend
+    legend = ax.legend(loc='lower left', borderpad=0.3,
+                        handletextpad=0.3, fontsize='small')
+    # Finish
+    plt.tight_layout(pad=0.1,h_pad=0.0,w_pad=0.0)
+    if outfil is not None:
+        plt.savefig(outfil)
+
+def qa_fiber_chi(frame, skyfibers, ncol=10, outfil=None):
+    """
+    Generate QA plots for individual sky-subtracted Sky fibers
+    Parameters:
+    frame
+    skyfibers
+    ncol: int, optional
+      Number of columns in plot
+    """
+    from scipy.stats import norm, chi2
+
+    # Mean spectrum
+
+    # Consider going to additional pages
+    nsky = len(skyfibers)
+    nrow = nsky // ncol + ((nsky%ncol) > 0)
+
+    # Plot
+    fig = plt.figure(figsize=(8, 5.0))
+    gs = gridspec.GridSpec(nrow,ncol)
+
+    xmin,xmax = -5., 5. # sigma
+    xchi_min, xchi_max = norm.cdf(xmin), norm.cdf(xmax)
+    xchi = np.linspace(norm.ppf(xchi_min),norm.ppf(xchi_max),100)
+    binsz = 0.5
+
+    for kk,skyfiber in enumerate(skyfibers):
+        # Histogram the sigma (should avoid bad ivar pixels)
+        msk = np.where(frame.ivar[skyfiber,:] > 0.)[0]
+        nsig = frame.flux[skyfiber,msk] * np.sqrt(frame.ivar[skyfiber,msk])
+        red_chi2 = np.sum( nsig**2) / len(msk)
+        print('Mean={:g}, chi^2={:g} for fiber={:d}'.format(
+            np.mean(nsig),red_chi2,kk))
+
+        # Simple histogram
+        i0 = int( np.min(nsig) / binsz) - 1
+        i1 = int( np.max(nsig) / binsz) + 1
+        rng = tuple( binsz*np.array([i0,i1]) )
+        nbin = i1-i0
+        # Histogram
+        hist, edges = np.histogram(nsig, range=rng, bins=nbin)
+        xhist = (edges[1:] + edges[:-1])/2.
+        # Plot histogram
+        ax= plt.subplot(gs[kk])
+        #ax.bar(edges[:-1], hist, width=binsz)
+        ax.hist(xhist, bins=edges, weights=hist, histtype='step')
+
+        # P(Chi) 
+        ychi = binsz*len(msk)*norm.pdf(xchi)
+        ax.plot(xchi, ychi, color='red')
+
+        # Axes
+        #ax_flux.set_ylabel('N')
+        ax.set_xlim(xmin,xmax)
+        #ax.text(0.5, 0.85, '{:d}'.format(kk), transform=ax.transAxes, ha='center')
+        ax.get_yaxis().set_ticks([]) # Suppress labeling
+        ax.get_xaxis().set_ticks([]) # Suppress labeling
+        if kk >= (ncol-2)*nrow:
+            ax.set_xlabel(r'$n\sigma$')
+
+    # Finish
+    plt.tight_layout(pad=0.1,h_pad=0.0,w_pad=0.0)
+    if outfil is not None:
+        plt.savefig(outfil)
 
 # ##################################################
 # ##################################################
