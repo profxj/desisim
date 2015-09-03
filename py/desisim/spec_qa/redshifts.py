@@ -112,7 +112,7 @@ def load_z(fibermap_files=None, zbest_files=None, path=None):
     sim_tab.add_columns(new_clms)
 
     # Return
-    #xdb.set_trace()
+    xdb.set_trace()
     return sim_tab # Masked Table
 
 def summary_stats(sim_tab, CAT_THRESH=5., outfil=None):
@@ -141,9 +141,11 @@ def summary_stats(sim_tab, CAT_THRESH=5., outfil=None):
         dz = ((cut_tab['REDM_Z'][gdo]-cut_tab['REDSHIFT'][gdo])/ 
             (1+cut_tab['REDSHIFT'][gdo]))
         idict['MED_DZ'] = np.median(dz)
+        # Efficiency
         # Catastrophic failures
         cat = np.where((cut_tab['REDM_Z'][gdo]-cut_tab['REDSHIFT'][gdo])/
             cut_tab['REDM_ZERR'][gdo] > CAT_THRESH)[0]
+        ZWARN
         idict['NCAT'] = len(cat)
         cata = cata + list(cat)
         # Append

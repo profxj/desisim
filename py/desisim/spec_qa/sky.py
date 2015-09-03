@@ -7,7 +7,7 @@ Utility functions to do simple QA on the Sky Modeling
 from __future__ import print_function, absolute_import, division, unicode_literals
 
 import numpy as np
-import sys, os, pdb
+import sys, os, pdb, copy
 
 from matplotlib import pyplot as plt
 import matplotlib.gridspec as gridspec
@@ -26,7 +26,64 @@ from desispec.io import read_sky
 from desispec import sky as dspec_sky
 from desispec.fiberflat import apply_fiberflat
 
-#from xastropy.xutils import xdebug as xdb
+from xastropy.xutils import xdebug as xdb
+
+def id_skylines(sky_spec, sky_ivar, nbuff=4, med_window=101,chk=False):
+    '''Automated routine to identify putative sky lines
+    Simple running median with comparison
+
+    Parameters:
+    ----------
+    sky_spec: ndarray
+    sky_ivar: ndarray
+    med_window
+
+    Returns:
+    ----------
+    idx: ndarray
+      Indices identified as related to sky lines
+    '''
+    from scipy.signal import medfilt
+    # Init Mask
+    npix = sky_spec.size
+    mask = np.array([False]*npix)
+    gdp = np.where((sky_spec > 0.) & (sky_ivar > 0.))[0]
+    mask[gdp] = True
+
+    xval = np.arange(len(sky_spec))
+
+    # Iterate
+    niter = 3
+    nsig = 10.
+    iskyps = [] # Candidates
+    for jj in range(niter):
+        # Geneate median
+        gd = np.where(mask==True)[0]
+        medf = medfilt(sky_spec[mask],kernel_size=med_window)
+        # Mask
+        badp = np.where((sky_spec[mask]-medf)*np.sqrt(sky_ivar[mask]) > nsig)[0]
+        if len(badp) > 0:
+            mask[gd[badp]] = False
+            iskyps = iskyps+list(gd[badp])
+    # Loop and buffer
+    skyp = np.array([False]*npix)
+    for iskyp in iskyps:
+        i0 = np.maximum(0,iskyp-1)
+        i1 = np.minimum(npix-1,iskyp+1)
+        if (sky_spec[iskyp]>sky_spec[i0]) & (sky_spec[iskyp]>sky_spec[i1]):
+            # Save
+            idx = iskyp + np.arange(-nbuff,nbuff+1)
+            idx = np.maximum(idx,0)
+            idx = np.minimum(idx,npix-1)
+            skyp[idx] = True
+    # Check
+    if chk:
+        plt.clf()
+        plt.plot(xval,sky_spec)
+        plt.plot(xval[skyp],sky_spec[skyp],'ro') 
+        plt.show()
+    # Return
+    return skyp
 
 def tst_meansky_fibers(simspec_fil, frame_root, fflat_root, path=None):
     '''Examines mean sky in SKY fibers
@@ -90,6 +147,11 @@ def tst_meansky_fibers(simspec_fil, frame_root, fflat_root, path=None):
         # Average up Truth
         avg_truth = np.mean(cskytruth,0) 
 
+        # Save for identifying sky lines later
+        sky_spec = copy.deepcopy(frame.flux[skyfibers[1],:])
+        sky_ivar = copy.deepcopy(frame.ivar[skyfibers[1],:])
+        #sky_lines = id_skylines(sky_spec, sky_ivar, chk=True)
+
         # Average up Extracted Sky
         avg_desi_sky = np.mean(frame.flux[skyfibers,:],0)
 
@@ -103,8 +165,9 @@ def tst_meansky_fibers(simspec_fil, frame_root, fflat_root, path=None):
         if False:
             qa_mean_spec(frame.wave, avg_desi_sky, avg_desi_sub, None, 
                 None, avg_truth, outfil='QA_sky_mean_'+camera+'.pdf')
-            qa_fiber_chi(frame, skyfibers, outfil='QA_fiber_chi_'+camera+'.pdf')
-        qa_fiber_stats(frame, skyfibers, outfil='QA_fiber_stats_'+camera+'.pdf')
+            #qa_fiber_chi(frame, skyfibers, outfil='QA_fiber_chi_'+camera+'.pdf')
+        qa_fiber_stats(frame, skyfibers, sky_spec, sky_ivar, 
+            outfil='QA_fiber_stats_'+camera+'.pdf')
         # 
         #break
         #xdb.set_trace()
@@ -250,7 +313,7 @@ def qa_mean_spec(wave, sky_model, sky_sub, sky_var, true_wave, true_sky,
     plt.tight_layout(pad=0.1,h_pad=0.0,w_pad=0.0)
     plt.savefig(outfil)
 
-def qa_fiber_stats(frame, skyfibers, outfil=None):
+def qa_fiber_stats(frame, skyfibers, sky_spec, sky_ivar, outfil=None):
     """
     Generate QA plot of fiber stats for individual sky-subtracted Sky fibers
     Parameters:
@@ -267,42 +330,50 @@ def qa_fiber_stats(frame, skyfibers, outfil=None):
     fig = plt.figure(figsize=(8, 5.0))
     gs = gridspec.GridSpec(1,2)
 
-    # Do stats
-    means = np.zeros(nsky)
-    medians = np.zeros(nsky)
-    red_chi2 = np.zeros(nsky)
-    for kk,skyfiber in enumerate(skyfibers):
-        # Histogram the sigma (should avoid bad ivar pixels)
-        msk = np.where(frame.ivar[skyfiber,:] > 0.)[0]
-        nsig = frame.flux[skyfiber,msk] * np.sqrt(frame.ivar[skyfiber,msk])
-        red_chi2[kk] = np.sum( nsig**2) / len(msk)
-        means[kk] = np.mean(nsig)
-        medians[kk] = np.median(nsig)
-        #print('Mean={:g}, chi^2={:g} for fiber={:d}'.format(
-        #    np.mean(nsig),red_chi2,kk))
-
     # Global
-    jj=0
-    ax= plt.subplot(gs[jj])
+    for jj in range(2):
+        ax= plt.subplot(gs[jj])
+        #
+        if jj==1:
+            sky_lines = id_skylines(sky_spec, sky_ivar)#, chk=True)
+        # Do stats
+        means = np.zeros(nsky)
+        medians = np.zeros(nsky)
+        red_chi2 = np.zeros(nsky)
+        for kk,skyfiber in enumerate(skyfibers):
+            if jj==0: # Global
+                lbl = 'Global'
+                msk = np.where(frame.ivar[skyfiber,:] > 0.)[0]
+            elif jj==1: # Skylines
+                lbl = 'SkyLines'
+                msk = np.where((frame.ivar[skyfiber,:] > 0.) &
+                    (sky_lines==True))[0]
+            #
+            nsig = frame.flux[skyfiber,msk] * np.sqrt(frame.ivar[skyfiber,msk])
+            red_chi2[kk] = np.sum( nsig**2) / len(msk)
+            means[kk] = np.mean(nsig)
+            medians[kk] = np.median(nsig)
 
-    xscatt = np.arange(nsky)
-    ax.scatter(skyfibers, medians, marker='o', s=1, label=r'Median $(\delta/\sigma)$')
-    ax.scatter(skyfibers, red_chi2-1., marker='s', edgecolor='blue',
-        facecolor='none',s=3, label=r'$\chi^2_\nu-1$')
 
-    # Axes
-    #ax_flux.set_ylabel('N')
-    #ax.set_xlim(xmin,xmax)
-    #lbls = ['{:d}'.format(skyfiber) for skyfiber in skyfibers]
-    #ax.get_xaxis().set_ticks(skyfibers,lbls)
-    #ax.set_ylim(-0.1, 0.2)
-    ax.plot([xmin,xmax], [0.,0], 'g--')
-    ax.set_xlim(xmin, xmax)
-    ax.set_xlabel('Fiber')
+        xscatt = np.arange(nsky)
+        ax.scatter(skyfibers, medians, marker='o', s=1, label=r'Median $(\delta/\sigma)$')
+        ax.scatter(skyfibers, red_chi2-1., marker='s', edgecolor='blue',
+            facecolor='none',s=3, label=r'$\chi^2_\nu-1$')
 
-    # Legend
-    legend = ax.legend(loc='lower left', borderpad=0.3,
-                        handletextpad=0.3, fontsize='small')
+        # Axes
+        #ax_flux.set_ylabel('N')
+        #ax.set_xlim(xmin,xmax)
+        #lbls = ['{:d}'.format(skyfiber) for skyfiber in skyfibers]
+        #ax.get_xaxis().set_ticks(skyfibers,lbls)
+        #ax.set_ylim(-0.1, 0.2)
+        ax.text(0.7, 0.05, lbl, transform=ax.transAxes, ha='left')
+        ax.plot([xmin,xmax], [0.,0], 'g--')
+        ax.set_xlim(xmin, xmax)
+        ax.set_xlabel('Fiber')
+
+        # Legend
+        legend = ax.legend(loc='lower left', borderpad=0.3,
+                            handletextpad=0.3, fontsize='small')
     # Finish
     plt.tight_layout(pad=0.1,h_pad=0.0,w_pad=0.0)
     if outfil is not None:
@@ -383,6 +454,7 @@ if __name__ == '__main__':
     flg_tst = 0 
     #flg_tst += 2**0  # Deconvolved mean [DEPRECATED]
     flg_tst += 2**1  # Sky fiber mean 
+    #flg_tst += 2**2  # Test ID sky lines
 
     if (flg_tst % 2**1) >= 2**0:
         path = '/Users/xavier/DESI/TST/20150211/' 
@@ -394,3 +466,10 @@ if __name__ == '__main__':
         path = '/Users/xavier/DESI/TST/20150211/' 
         tst_meansky_fibers('/Users/xavier/DESI/TST/20150211/simspec-00000002.fits',
             '0-00000002.fits', '0-00000001.fits', path=path)
+
+    if (flg_tst % 2**3) >= 2**2:
+        skyhdu = fits.open('sky_spec.fits')
+        sky_spec = skyhdu[0].data
+        sky_ivar = skyhdu[1].data
+        # 
+        id_skylines(sky_spec,sky_ivar)
